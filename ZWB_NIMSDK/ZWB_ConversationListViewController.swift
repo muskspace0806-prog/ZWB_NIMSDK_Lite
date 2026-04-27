@@ -2,54 +2,69 @@
 //  ZWB_ConversationListViewController.swift
 //  ZWB_NIMSDK
 //
-//  容器页面：默认嵌入 pod 的 LocalConversationController（继承版）
-//  悬浮按钮可切换到完全自定义版本 ZWB_CustomConversationListViewController
+//  容器页面，包含两种会话列表模式：
+//  1. 继承版（pod）：使用 LocalConversationController，UI 由云信提供
+//  2. 自定义版：使用 ZWB_CustomConversationListViewController，UI 完全自定义
 //
-//  继承版跳转拦截原理：
-//  LocalConversationController 点击 cell 后，内部通过 ChatRouter 调用
-//  Router.shared.use(url, parameters:) push 一个 P2PChatViewController。
-//  这里通过实现 UINavigationControllerDelegate，在 push 发生前拦截，
-//  检测到目标是 P2PChatViewController 时，替换成 ZWB_ChatViewController，
-//  从而统一使用我们自定义的聊天页面，方便后续业务扩展。
+//  两个悬浮按钮：
+//  - 左侧：切换会话列表模式（继承版 / 自定义版）
+//  - 右侧：切换跳转方式（云信默认 / 自定义跳转），仅继承模式下显示
+//
+//  跳转拦截原理：
+//  viewWillDisappear 不清除 delegate，避免 push 时 delegate 被置 nil
+//  willShow 检测到 P2PChatViewController 时，根据 useCustomChat 决定是否替换
 //
 
 import UIKit
 import NELocalConversationUIKit
 import NEChatUIKit
+import NEChatKit
 import SnapKit
 
 class ZWB_ConversationListViewController: UIViewController {
 
     // MARK: - State
 
-    /// 当前是否处于自定义模式（false = pod 继承版，true = 完全自定义版）
+    /// 当前是否处于完全自定义会话列表模式
     private var isCustomMode: Bool = false {
-        didSet { switchMode() }
+        didSet {
+            switchMode()
+            chatSwitchButton.isHidden = isCustomMode
+        }
+    }
+
+    /// 继承版模式下，cell 点击是否使用自定义跳转（ZWB_ChatViewController）
+    private var useCustomChat: Bool = false {
+        didSet { updateChatSwitchButtonTitle() }
     }
 
     // MARK: - Child VCs
 
-    /// pod 提供的会话列表（继承版），UI 由云信 UIKit 提供
     private let podVC    = LocalConversationController()
-
-    /// 完全自定义的会话列表，UI 和数据逻辑均由业务层控制
     private let customVC = ZWB_CustomConversationListViewController()
 
     // MARK: - UI
 
-    private lazy var switchButton: UIButton = {
+    /// 左侧按钮：切换会话列表模式
+    private lazy var listSwitchButton: UIButton = makeFloatButton(action: #selector(listSwitchTapped))
+
+    /// 右侧按钮：切换跳转方式（仅继承模式下显示）
+    private lazy var chatSwitchButton: UIButton = makeFloatButton(action: #selector(chatSwitchTapped))
+
+    private func makeFloatButton(action: Selector) -> UIButton {
         let btn = UIButton(type: .system)
         btn.backgroundColor = .systemBlue
         btn.setTitleColor(.white, for: .normal)
-        btn.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
-        btn.layer.cornerRadius = 20
+        btn.titleLabel?.font = .systemFont(ofSize: 12, weight: .medium)
+        btn.layer.cornerRadius = 18
         btn.layer.shadowColor = UIColor.black.cgColor
         btn.layer.shadowOpacity = 0.2
         btn.layer.shadowOffset = CGSize(width: 0, height: 2)
         btn.layer.shadowRadius = 4
-        btn.addTarget(self, action: #selector(toggleMode), for: .touchUpInside)
+        btn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+        btn.addTarget(self, action: action, for: .touchUpInside)
         return btn
-    }()
+    }
 
     // MARK: - Lifecycle
 
@@ -57,74 +72,96 @@ class ZWB_ConversationListViewController: UIViewController {
         super.viewDidLoad()
         title = "消息"
         view.backgroundColor = .white
-        setupSwitchButton()
+        setupButtons()
         switchMode()
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // 设置导航栏代理，用于拦截继承版的 push 跳转
-        // 必须在 viewDidAppear 设置，确保 navigationController 已存在
+        // 设置 delegate，用于拦截继承版 push 跳转
         navigationController?.delegate = self
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        // 离开页面时移除代理，避免影响其他页面的导航行为
-        if navigationController?.delegate === self {
-            navigationController?.delegate = nil
-        }
+        // 注意：不在这里清除 delegate
+        // push 到聊天页时也会触发 viewWillDisappear，清除 delegate 会导致 willShow 收不到回调
     }
 
     // MARK: - Layout
 
-    private func setupSwitchButton() {
-        view.addSubview(switchButton)
-        switchButton.snp.makeConstraints { make in
+    private func setupButtons() {
+        view.addSubview(listSwitchButton)
+        view.addSubview(chatSwitchButton)
+
+        listSwitchButton.snp.makeConstraints { make in
+            make.leading.equalTo(20)
+            make.bottom.equalTo(view.safeAreaLayoutGuide).offset(-20)
+            make.height.equalTo(36)
+        }
+
+        chatSwitchButton.snp.makeConstraints { make in
             make.trailing.equalTo(-20)
             make.bottom.equalTo(view.safeAreaLayoutGuide).offset(-20)
-            make.height.equalTo(40)
-            make.width.greaterThanOrEqualTo(120)
+            make.height.equalTo(36)
         }
-        view.bringSubviewToFront(switchButton)
-        updateButtonTitle()
+
+        updateListSwitchButtonTitle()
+        updateChatSwitchButtonTitle()
+    }
+
+    // MARK: - 按钮点击
+
+    @objc private func listSwitchTapped() {
+        isCustomMode.toggle()
+    }
+
+    @objc private func chatSwitchTapped() {
+        let alert = UIAlertController(
+            title: "选择跳转方式",
+            message: "点击会话 cell 后跳转到哪个页面",
+            preferredStyle: .actionSheet
+        )
+        alert.addAction(UIAlertAction(title: "云信默认 (P2PChatViewController)", style: .default) { [weak self] _ in
+            self?.useCustomChat = false
+        })
+        alert.addAction(UIAlertAction(title: "自定义 (ZWB_ChatViewController)", style: .default) { [weak self] _ in
+            self?.useCustomChat = true
+        })
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(alert, animated: true)
     }
 
     // MARK: - 切换模式
 
-    @objc private func toggleMode() {
-        isCustomMode.toggle()
-    }
-
     private func switchMode() {
-        // 移除当前所有子 VC
         children.forEach {
             $0.willMove(toParent: nil)
             $0.view.removeFromSuperview()
             $0.removeFromParent()
         }
-
-        // 嵌入目标子 VC（插入到 switchButton 下方，保证按钮始终可见）
         let target: UIViewController = isCustomMode ? customVC : podVC
         addChild(target)
-        view.insertSubview(target.view, belowSubview: switchButton)
+        view.insertSubview(target.view, belowSubview: listSwitchButton)
         target.view.snp.makeConstraints { make in
             make.edges.equalToSuperview()
         }
         target.didMove(toParent: self)
-
-        updateButtonTitle()
+        updateListSwitchButtonTitle()
     }
 
-    private func updateButtonTitle() {
-        let title = isCustomMode ? "切换到继承页面" : "切换到自定义页面"
-        switchButton.setTitle(title, for: .normal)
+    private func updateListSwitchButtonTitle() {
+        listSwitchButton.setTitle(isCustomMode ? "继承版列表" : "自定义列表", for: .normal)
+    }
+
+    private func updateChatSwitchButtonTitle() {
+        chatSwitchButton.setTitle(useCustomChat ? "自定义跳转" : "云信默认跳转", for: .normal)
     }
 }
 
 // MARK: - UINavigationControllerDelegate
-// 拦截继承版（LocalConversationController）的 push 跳转
-// 当 pod 内部 push P2PChatViewController 时，替换成 ZWB_ChatViewController
+// 继承版模式下，拦截 pod 内部 push P2PChatViewController
+// useCustomChat = true 时替换成 ZWB_ChatViewController
 
 extension ZWB_ConversationListViewController: UINavigationControllerDelegate {
 
@@ -133,24 +170,21 @@ extension ZWB_ConversationListViewController: UINavigationControllerDelegate {
         willShow viewController: UIViewController,
         animated: Bool
     ) {
-        // 只在继承模式下拦截，自定义模式由 ZWB_CustomConversationListViewController 自己处理
         guard !isCustomMode else { return }
+        guard viewController is P2PChatViewController else { return }
 
-        // 检测到 pod 内部即将 push P2PChatViewController
-        guard let p2pVC = viewController as? P2PChatViewController else { return }
+        let conversationId = ChatRepo.conversationId
+        guard !conversationId.isEmpty else { return }
 
-        // 从 viewModel 取出 conversationId（nullable，需要保护）
-        guard let conversationId = p2pVC.viewModel.conversationId,
-              !conversationId.isEmpty else { return }
-
-        // 用 ZWB_ChatViewController 替换，保持 conversationId 一致
-        let zwbChatVC = ZWB_ChatViewController(conversationId: conversationId)
-
-        // 替换导航栈中的 P2PChatViewController -> ZWB_ChatViewController
-        var vcs = navigationController.viewControllers
-        if let idx = vcs.firstIndex(where: { $0 === p2pVC }) {
-            vcs[idx] = zwbChatVC
-            navigationController.setViewControllers(vcs, animated: false)
+        if useCustomChat {
+            // 自定义跳转：替换成 ZWB_ChatViewController
+            let zwbChatVC = ZWB_ChatViewController(conversationId: conversationId)
+            var vcs = navigationController.viewControllers
+            if let idx = vcs.indices.last {
+                vcs[idx] = zwbChatVC
+                navigationController.setViewControllers(vcs, animated: false)
+            }
         }
+        // useCustomChat = false：不做替换，保持云信默认 P2PChatViewController
     }
 }
