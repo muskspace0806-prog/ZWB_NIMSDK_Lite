@@ -144,7 +144,7 @@ class ZWB_ImageTextAttachment: ZWB_BaseCustomAttachment {
 // 字段对标 ZWB_ImageTextAttachment：picUrl（图片）+ title（文字）
 class ZWB_CustomXibAttachment: ZWB_BaseCustomAttachment {
 
-    var title:  String?
+    var desc:  String?
     var picUrl: String?
 
     override func parse(_ attach: String) {
@@ -153,14 +153,14 @@ class ZWB_CustomXibAttachment: ZWB_BaseCustomAttachment {
               var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let innerData = json["data"] as? [String: Any] else { return }
 
-        title  = innerData["title"]  as? String
+        desc  = innerData["desc"]  as? String
         picUrl = innerData["picUrl"] as? String
 
         parseBaseFields(&json)  // ⚠️ 最后调用，写入 raw["type"]
     }
 
     override func conversationText() -> String {
-        return "[\(title ?? "自定义消息")]"
+        return "[\(desc ?? "自定义消息")]"
     }
 
     // xib 固定高度：12(top) + 120(图片) + 12(间距) + 约20(label) + 12(bottom)

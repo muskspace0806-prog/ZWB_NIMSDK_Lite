@@ -49,7 +49,7 @@ class ZWB_CustomXibCell: ZWB_BaseCustomCell {
         let iconView     = contentView.viewWithTag(10) as? UIImageView
         let contentLabel = contentView.viewWithTag(11) as? UILabel
 
-        contentLabel?.text = attachment.title ?? ""
+        contentLabel?.text = attachment.desc ?? ""
         contentLabel?.isHidden = false
 
         if let urlStr = attachment.picUrl, let url = URL(string: urlStr) {
