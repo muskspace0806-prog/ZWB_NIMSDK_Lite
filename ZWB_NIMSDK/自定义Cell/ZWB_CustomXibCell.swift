@@ -42,7 +42,7 @@ class ZWB_CustomXibCell: ZWB_BaseCustomCell {
     }
 
     // MARK: - 纯赋值，不用管 isSend
-
+    
     override func bindData(to contentView: UIView, attachment: ZWB_BaseCustomAttachment) {
         guard let attachment = attachment as? ZWB_CustomXibAttachment else { return }
 

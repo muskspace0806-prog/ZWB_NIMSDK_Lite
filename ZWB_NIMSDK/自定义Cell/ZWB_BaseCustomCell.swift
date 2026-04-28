@@ -86,12 +86,20 @@ class ZWB_BaseCustomCell: NEBaseChatMessageCell {
     // MARK: - setModel（框架调用，子类不需要 override）
 
     override func setModel(_ model: MessageContentModel, _ isSend: Bool) {
-        // contentSize 保底
+        // contentSize 保底，对齐框架的 height 计算公式
         if let attachment = model.message?.attachment as? ZWB_BaseCustomAttachment,
            model.contentSize.width == 0 {
             let size = contentSize(for: attachment)
             model.contentSize = size
-            model.height = size.height + 16
+            // 对齐框架公式：contentHeight + 上下边距 + 昵称高度 + pin标记高度
+            model.height = size.height
+                         + chat_content_margin * 2   // 气泡上下内边距 8+8
+                         + model.fullNameHeight       // 群聊昵称（p2p=0）
+                         + chat_pin_height            // pin 标记 16
+            // 有时间戳时额外加时间戳高度
+            if let time = model.timeContent, !time.isEmpty {
+                model.height += chat_timeCellH
+            }
         }
 
         super.setModel(model, isSend)
