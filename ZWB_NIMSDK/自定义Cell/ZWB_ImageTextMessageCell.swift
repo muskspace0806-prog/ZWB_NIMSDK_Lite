@@ -2,161 +2,76 @@
 //  ZWB_ImageTextMessageCell.swift
 //  ZWB_NIMSDK
 //
-//  图文自定义消息 Cell
-//  继承 NEBaseChatMessageCell，左右气泡、头像由父类处理
-//  只需在 bubbleImageLeft/bubbleImageRight 里添加内容视图
+//  图文消息 Cell（type=10101，first=10, second=101）
+//  继承 ZWB_BaseCustomCell，只需实现 makeContentView + bindData
 //
 
 import UIKit
 import SnapKit
 import Kingfisher
 import NEChatUIKit
-import NECoreIM2Kit
 
-class ZWB_ImageTextMessageCell: NEBaseChatMessageCell {
+class ZWB_ImageTextMessageCell: ZWB_BaseCustomCell {
 
-    // MARK: - 内容视图（左右各一套，父类根据方向控制显隐）
+    // MARK: - 内容视图（纯代码）
 
-    // 左侧（接收方）
-    private let titleLabelLeft  = ZWB_ImageTextMessageCell.makeTitleLabel()
-    private let imageViewLeft   = ZWB_ImageTextMessageCell.makeImageView()
-    private let descLabelLeft   = ZWB_ImageTextMessageCell.makeDescLabel()
+    override func makeContentView() -> UIView {
+        let container = UIView()
 
-    // 右侧（发送方）
-    private let titleLabelRight = ZWB_ImageTextMessageCell.makeTitleLabel()
-    private let imageViewRight  = ZWB_ImageTextMessageCell.makeImageView()
-    private let descLabelRight  = ZWB_ImageTextMessageCell.makeDescLabel()
+        let titleLabel = UILabel()
+        titleLabel.tag = 1
+        titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        titleLabel.numberOfLines = 2
 
-    // MARK: - Init
+        let imageView = UIImageView()
+        imageView.tag = 2
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.layer.cornerRadius = 6
+        imageView.backgroundColor = .systemGray5
 
-    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
-        super.init(style: style, reuseIdentifier: reuseIdentifier)
-        setupContentViews()
-    }
+        let descLabel = UILabel()
+        descLabel.tag = 3
+        descLabel.font = .systemFont(ofSize: 13)
+        descLabel.textColor = .secondaryLabel
+        descLabel.numberOfLines = 3
 
-    required init?(coder: NSCoder) { fatalError() }
+        let stack = UIStackView(arrangedSubviews: [titleLabel, imageView, descLabel])
+        stack.axis = .vertical
+        stack.spacing = 8
+        stack.alignment = .fill
 
-    // MARK: - 布局（添加到父类的 bubbleImageLeft/bubbleImageRight）
-    // 使用 UIStackView 自动处理空视图间距，避免 title/desc 为空时出现多余空白
-
-    private func setupContentViews() {
-        let padding: CGFloat = 12
-
-        // 左侧气泡内容
-        let stackLeft = makeContentStack()
-        stackLeft.addArrangedSubview(titleLabelLeft)
-        stackLeft.addArrangedSubview(imageViewLeft)
-        stackLeft.addArrangedSubview(descLabelLeft)
-        bubbleImageLeft.addSubview(stackLeft)
-        stackLeft.snp.makeConstraints { make in
-            make.edges.equalToSuperview().inset(padding)
+        container.addSubview(stack)
+        stack.snp.makeConstraints { make in
+            make.edges.equalToSuperview().inset(12)
         }
-        imageViewLeft.snp.makeConstraints { make in
+        imageView.snp.makeConstraints { make in
             make.height.equalTo(120)
         }
 
-        // 右侧气泡内容
-        let stackRight = makeContentStack()
-        stackRight.addArrangedSubview(titleLabelRight)
-        stackRight.addArrangedSubview(imageViewRight)
-        stackRight.addArrangedSubview(descLabelRight)
-        bubbleImageRight.addSubview(stackRight)
-        stackRight.snp.makeConstraints { make in
-            make.edges.equalToSuperview().inset(padding)
-        }
-        imageViewRight.snp.makeConstraints { make in
-            make.height.equalTo(120)
-        }
+        return container
     }
 
-    /// 创建内容 StackView
-    private func makeContentStack() -> UIStackView {
-        let sv = UIStackView()
-        sv.axis = .vertical
-        sv.spacing = 8
-        sv.alignment = .fill
-        sv.distribution = .fill
-        sv.translatesAutoresizingMaskIntoConstraints = false
-        return sv
-    }
+    // MARK: - 纯赋值，不用管 isSend
 
-    // MARK: - 数据绑定（pod 调用）
+    override func bindData(to contentView: UIView, attachment: ZWB_BaseCustomAttachment) {
+        guard let attachment = attachment as? ZWB_ImageTextAttachment else { return }
 
-    override func setModel(_ model: MessageContentModel, _ isSend: Bool) {
-        // 保底：确保 contentSize 已设置，避免气泡宽高为 0 导致空白
-        if let attachment = model.message?.attachment as? ZWB_ImageTextAttachment {
-            if model.contentSize.width == 0 {
-                let h = attachment.cellHeight()
-                model.contentSize = CGSize(width: 230, height: h)
-                model.height = h + 16
-            }
-        }
+        let titleLabel = contentView.viewWithTag(1) as? UILabel
+        let imageView  = contentView.viewWithTag(2) as? UIImageView
+        let descLabel  = contentView.viewWithTag(3) as? UILabel
 
-        super.setModel(model, isSend)
+        titleLabel?.text = attachment.title
+        titleLabel?.isHidden = attachment.title?.isEmpty ?? true
 
-        // 从 attachment 取数据绑定 UI
-        guard let attachment = model.message?.attachment as? ZWB_ImageTextAttachment else {
-            return
-        }
-
-        let titleLabel = isSend ? titleLabelRight : titleLabelLeft
-        let imageView  = isSend ? imageViewRight  : imageViewLeft
-        let descLabel  = isSend ? descLabelRight  : descLabelLeft
-
-        titleLabel.text = attachment.title
-        // title 为空时隐藏，StackView 自动收起不占空间
-        titleLabel.isHidden = attachment.title?.isEmpty ?? true
-
-        descLabel.text = attachment.desc
-        // desc 为空时隐藏
-        descLabel.isHidden = attachment.desc?.isEmpty ?? true
+        descLabel?.text = attachment.desc
+        descLabel?.isHidden = attachment.desc?.isEmpty ?? true
 
         if let urlStr = attachment.picUrl, let url = URL(string: urlStr) {
-            imageView.kf.setImage(with: url, placeholder: UIImage(systemName: "photo"))
-            imageView.isHidden = false
+            imageView?.kf.setImage(with: url, placeholder: UIImage(systemName: "photo"))
+            imageView?.isHidden = false
         } else {
-            imageView.isHidden = true
+            imageView?.isHidden = true
         }
-    }
-
-    // MARK: - 左右显隐（父类调用，控制左右内容显示）
-
-    override func showLeftOrRight(showRight: Bool) {
-        super.showLeftOrRight(showRight: showRight)
-        titleLabelLeft.isHidden  = showRight
-        imageViewLeft.isHidden   = showRight
-        descLabelLeft.isHidden   = showRight
-        titleLabelRight.isHidden = !showRight
-        imageViewRight.isHidden  = !showRight
-        descLabelRight.isHidden  = !showRight
-    }
-
-    // MARK: - UI 工厂方法
-
-    private static func makeTitleLabel() -> UILabel {
-        let lb = UILabel()
-        lb.font = .systemFont(ofSize: 15, weight: .medium)
-        lb.numberOfLines = 2
-        lb.translatesAutoresizingMaskIntoConstraints = false
-        return lb
-    }
-
-    private static func makeImageView() -> UIImageView {
-        let iv = UIImageView()
-        iv.contentMode = .scaleAspectFill
-        iv.clipsToBounds = true
-        iv.layer.cornerRadius = 6
-        iv.backgroundColor = .systemGray5
-        iv.translatesAutoresizingMaskIntoConstraints = false
-        return iv
-    }
-
-    private static func makeDescLabel() -> UILabel {
-        let lb = UILabel()
-        lb.font = .systemFont(ofSize: 13)
-        lb.textColor = .secondaryLabel
-        lb.numberOfLines = 3
-        lb.translatesAutoresizingMaskIntoConstraints = false
-        return lb
     }
 }
