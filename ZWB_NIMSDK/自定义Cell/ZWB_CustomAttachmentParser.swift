@@ -29,17 +29,14 @@ class ZWB_CustomAttachmentParser: NSObject, V2NIMMessageCustomAttachmentParser {
 
         // 根据 first + second 联合判断，返回对应的附件对象
         switch ZWB_CellType.from(first: first, second: second) {
-
         case .imageText:
             let attachment = ZWB_ImageTextAttachment()
             attachment.parse(attach)
             return attachment
-
-        case .user:
-            let attachment = ZWB_UserAttachment()
+        case .customXib:
+            let attachment = ZWB_CustomXibAttachment()
             attachment.parse(attach)
             return attachment
-
         case .none:
             print("[ZWB_Parser] ⚠️ 未知类型 first=\(first) second=\(second)")
             return nil

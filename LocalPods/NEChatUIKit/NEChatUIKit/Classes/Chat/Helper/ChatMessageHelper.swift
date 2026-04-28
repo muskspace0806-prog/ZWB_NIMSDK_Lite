@@ -160,10 +160,6 @@ public class ChatMessageHelper: NSObject {
   /// - Parameter message: 消息
   /// - Returns: 消息体
   public static func modelFromMessage(message: V2NIMMessage) -> MessageModel {
-    // ZWB 注入：自定义消息先调用 parse，使 attachment 解析 raw 数据
-    if let attachment = message.attachment as? V2NIMMessageCustomAttachment {
-      attachment.parse(attachment.raw)
-    }
     var model: MessageModel
     switch message.messageType {
     case .MESSAGE_TYPE_VIDEO:
@@ -219,10 +215,6 @@ public class ChatMessageHelper: NSObject {
   ///   - message: 消息
   ///   - completion: 完成回调
   public static func modelFromMessage(message: V2NIMMessage, _ completion: @escaping (MessageModel) -> Void) {
-    // ZWB 注入：自定义消息先调用 parse
-    if let attachment = message.attachment as? V2NIMMessageCustomAttachment {
-      attachment.parse(attachment.raw)
-    }
     var model: MessageModel
     switch message.messageType {
     case .MESSAGE_TYPE_VIDEO:

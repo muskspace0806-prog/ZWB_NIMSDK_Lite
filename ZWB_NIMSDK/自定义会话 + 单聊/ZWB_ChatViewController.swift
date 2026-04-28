@@ -2,41 +2,41 @@
 //  ZWB_ChatViewController.swift
 //  ZWB_NIMSDK
 //
-//  单聊页面，嵌入 P2PChatViewController 作为子 VC
+//  单聊页面，继承 P2PChatViewController，注入自定义 ViewModel
 //
-//  自定义消息 cell 通过 ZWB_IMManager.setupIM 里的 regsiterCustomCell 统一注册
-//  自定义消息高度通过 ZWB_ChatMessageHelper+Swizzle 里的 Swizzle 注入
+//  方案说明：
+//  直接继承 P2PChatViewController，在 init 中将 viewModel 替换为
+//  ZWB_P2PChatViewModel，从而 override modelFromMessage 补调 parse，
+//  解决历史消息 raw["type"] 缺失的问题。
+//
+//  注意：super.init 内部已调用 addListener()（绑定旧 ViewModel），
+//  替换 viewModel 后需重新调用 addListener()，否则新 ViewModel 收不到事件。
+//
+//  不修改任何 LocalPods 文件。
 //
 
-import UIKit
 import NEChatUIKit
+import NIMSDK
 
-class ZWB_ChatViewController: UIViewController {
+class ZWB_ChatViewController: P2PChatViewController {
 
-    /// 当前会话 ID
-    private var conversationId: String
-
-    /// 云信提供的单聊 VC，作为子 VC 嵌入
-    private let chatVC: P2PChatViewController
-
-    /// 通过会话 ID 初始化
-    init(conversationId: String) {
-        self.conversationId = conversationId
-        self.chatVC = P2PChatViewController(conversationId: conversationId)
-        super.init(nibName: nil, bundle: nil)
+    /// 通过会话 ID 初始化（无锚点消息）
+    override public init(conversationId: String) {
+        super.init(conversationId: conversationId)
+        // 替换为自定义 ViewModel，override modelFromMessage 补调 parse
+        viewModel = ZWB_P2PChatViewModel(conversationId: conversationId, anchor: nil)
+        // super.init 已绑定旧 ViewModel 的 listener，替换后重新绑定
+        viewModel.addListener()
     }
 
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
+    /// 通过会话 ID + 锚点消息初始化
+    override public init(conversationId: String, anchor: V2NIMMessage?) {
+        super.init(conversationId: conversationId)
+        viewModel = ZWB_P2PChatViewModel(conversationId: conversationId, anchor: anchor)
+        viewModel.addListener()
     }
 
-    override func viewDidLoad() {
-        super.viewDidLoad()
-        // 将 P2PChatViewController 作为子 VC 嵌入，充满整个视图
-        addChild(chatVC)
-        chatVC.view.frame = view.bounds
-        chatVC.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(chatVC.view)
-        chatVC.didMove(toParent: self)
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
     }
 }

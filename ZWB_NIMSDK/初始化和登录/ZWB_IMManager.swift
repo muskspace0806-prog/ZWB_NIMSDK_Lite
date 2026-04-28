@@ -69,12 +69,8 @@ class ZWB_IMManager {
         // key 为 ZWB_CellType.rawValue，与 ZWB_CustomAttachment 里写入的 "type" 字段对应
         NEChatUIKitClient.instance.regsiterCustomCell([
             "\(ZWB_CellType.imageText.rawValue)": ZWB_ImageTextMessageCell.self,
-            // 新增自定义消息类型时在此处添加，例如：
-            // "\(ZWB_CellType.user.rawValue)": ZWB_UserMessageCell.self,
+            "\(ZWB_CellType.customXib.rawValue)": ZWB_CustomXibCell.self,
         ])
-
-        // 安装 Method Swizzle：注入自定义消息的 customType 和高度
-//        ZWB_ChatMessageSwizzle.install()
 
         // 注册自定义消息附件解析器（将 raw JSON 解析成对应的 attachment 对象）
         ZWB_CustomAttachmentParser.register()
