@@ -1,6 +1,6 @@
 platform :ios, '13.0'
 
-target 'ZWB_NIMSDK' do
+target 'ZWB_NIMSDK_CustomCell' do
   use_frameworks!
 
   pod 'NEChatKit',      '10.9.10'
