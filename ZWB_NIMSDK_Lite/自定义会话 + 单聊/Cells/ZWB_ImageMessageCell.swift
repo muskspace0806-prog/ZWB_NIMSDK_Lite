@@ -15,6 +15,10 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
 
     /// TableView 复用标识符
     static let reuseId = "ZWB_ImageMessageCell"
+    /// 图片点击回调，回传当前显示图（若已加载）
+    var onImageTapped: ((UIImage?) -> Void)?
+    /// 当前可用于预览的图片（仅在真实图片加载成功后非空）
+    var imageForPreview: UIImage? { hasValidImage ? photoView.image : nil }
 
     // MARK: - UI
 
@@ -29,6 +33,8 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
         return iv
     }()
 
+    private var hasValidImage = false
+
     // MARK: - 初始化
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
@@ -38,6 +44,8 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
             $0.edges.equalToSuperview()
             $0.width.height.equalTo(160)
         }
+        photoView.isUserInteractionEnabled = true
+        photoView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(imageTapped)))
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -51,6 +59,7 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
     func configure(message: V2NIMMessage, isSend: Bool) {
         applyLayout(isSend: isSend, senderId: message.senderId ?? "")
         bubbleView.backgroundColor = .clear
+        hasValidImage = false
 
         guard let att = message.attachment as? V2NIMMessageImageAttachment else {
             photoView.image = UIImage(systemName: "photo")
@@ -62,13 +71,25 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
            FileManager.default.fileExists(atPath: localPath),
            let localImage = UIImage(contentsOfFile: localPath) {
             photoView.image = localImage
+            hasValidImage = true
             return
         }
 
         if let urlStr = att.url, let url = URL(string: urlStr) {
-            photoView.kf.setImage(with: url, placeholder: UIImage(systemName: "photo"))
+            photoView.kf.setImage(with: url, placeholder: UIImage(systemName: "photo")) { [weak self] result in
+                switch result {
+                case .success:
+                    self?.hasValidImage = true
+                case .failure:
+                    self?.hasValidImage = false
+                }
+            }
         } else {
             photoView.image = UIImage(systemName: "photo")
         }
+    }
+
+    @objc private func imageTapped() {
+        onImageTapped?(hasValidImage ? photoView.image : nil)
     }
 }

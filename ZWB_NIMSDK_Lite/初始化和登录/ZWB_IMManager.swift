@@ -9,6 +9,11 @@
 import UIKit
 import NIMSDK
 
+extension Notification.Name {
+    /// 当前账号在其他设备登录，导致本端被踢下线
+    static let zwbIMKickedOffline = Notification.Name("zwb.im.kicked.offline")
+}
+
 // MARK: - SDK 初始化配置
 
 /// SDK 初始化所需参数
@@ -35,11 +40,16 @@ struct ZWB_IMLoginParam {
 /// - 初始化：`setupIM(config:)`
 /// - 登录：`login(param:completion:)`
 /// - 登出：`logout(completion:)`
-class ZWB_IMManager {
+class ZWB_IMManager: NSObject, V2NIMLoginListener {
 
     /// 全局单例
     static let shared = ZWB_IMManager()
-    private init() {}
+    private override init() {}
+
+    /// 是否已经完成过 SDK 注册
+    private var didRegisterSDK = false
+    /// 是否已添加登录监听
+    private var didAddLoginListener = false
 
     // MARK: - 初始化 SDK
 
@@ -50,13 +60,21 @@ class ZWB_IMManager {
     func setupIM(config: ZWB_IMConfig) {
         guard !config.appKey.isEmpty else { return }
 
-        let option = NIMSDKOption(appKey: config.appKey)
-        option.apnsCername = config.apnsCerName
+        if !didRegisterSDK {
+            let option = NIMSDKOption(appKey: config.appKey)
+            option.apnsCername = config.apnsCerName
 
-        // 必须使用 registerWithOptionV2，否则 v2LoginService 等 V2 API 不可用
-        let v2Option = V2NIMSDKOption()
-        v2Option.enableV2CloudConversation = false  // 本地会话模式，不使用云端会话
-        NIMSDK.shared().register(withOptionV2: option, v2Option: v2Option)
+            // 必须使用 registerWithOptionV2，否则 v2LoginService 等 V2 API 不可用
+            let v2Option = V2NIMSDKOption()
+            v2Option.enableV2CloudConversation = false  // 本地会话模式，不使用云端会话
+            NIMSDK.shared().register(withOptionV2: option, v2Option: v2Option)
+            didRegisterSDK = true
+        }
+
+        if !didAddLoginListener {
+            NIMSDK.shared().v2LoginService.add(self)
+            didAddLoginListener = true
+        }
 
         // 注册自定义消息附件解析器，必须在任何消息收发之前调用
         ZWB_CustomAttachmentParser.register()
@@ -75,6 +93,7 @@ class ZWB_IMManager {
             token: param.token,
             option: nil
         ) {
+            self.kickOtherLoginClientsIfNeeded()
             completion(nil)
         } failure: { error in
             completion(error)
@@ -106,5 +125,25 @@ class ZWB_IMManager {
     /// 当前登录的账号（accid），未登录时返回空字符串
     var currentAccount: String {
         return NIMSDK.shared().v2LoginService.getLoginUser() ?? ""
+    }
+
+    // MARK: - V2NIMLoginListener
+
+    /// 被其他端踢下线（互踢）回调
+    @objc func onKickedOffline(_ detail: V2NIMKickedOfflineDetail) {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .zwbIMKickedOffline, object: detail)
+        }
+    }
+
+    /// 主动互踢：登录成功后踢掉其它在线终端
+    private func kickOtherLoginClientsIfNeeded() {
+        let loginService = NIMSDK.shared().v2LoginService
+        guard let currentClientId = loginService.getCurrentLoginClient()?.clientId else { return }
+        let clients = loginService.getLoginClients() ?? []
+        let otherClients = clients.filter { $0.clientId != currentClientId }
+        otherClients.forEach { client in
+            loginService.kickOffline(client, success: nil, failure: nil)
+        }
     }
 }

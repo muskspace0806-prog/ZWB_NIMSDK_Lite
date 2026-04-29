@@ -11,6 +11,7 @@ import UIKit
 import NIMSDK
 import SnapKit
 import TZImagePickerController
+import AVFoundation
 
 // MARK: - 列表数据项枚举
 
@@ -39,6 +40,14 @@ class ZWB_ChatViewController: UIViewController {
 
     /// 语音录制器
     private let voiceRecorder = ZWB_VoiceRecorder()
+    /// 语音播放播放器
+    private var audioPlayer: AVAudioPlayer?
+    /// 当前播放中的消息 clientId
+    private var playingAudioMessageClientId: String?
+    /// 正在下载的语音消息，避免重复下载
+    private var downloadingAudioMessageClientIds: Set<String> = []
+    /// 全屏图片预览蒙层
+    private var imagePreviewOverlay: UIView?
 
     // MARK: - UI
 
@@ -112,12 +121,15 @@ class ZWB_ChatViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         markAsRead()
+        removeImagePreviewOverlay()
+        stopAudioPlayIfNeeded()
         if voiceRecorder.isRecording {
             voiceRecorder.cancelRecording()
         }
     }
 
     deinit {
+        stopAudioPlayIfNeeded()
         NIMSDK.shared().v2MessageService.remove(self)
         NotificationCenter.default.removeObserver(self)
     }
@@ -320,10 +332,17 @@ class ZWB_ChatViewController: UIViewController {
     private func sendAudio(filePath: String, duration: Int) {
         let fileName = (filePath as NSString).lastPathComponent
         let scene = V2NIMStorageSceneConfig.default_IM().sceneName
+
+        // SDK 语音时长单位是毫秒，优先用音频实际时长兜底，避免接收端显示 0 秒。
+        let asset = AVURLAsset(url: URL(fileURLWithPath: filePath))
+        let actualMs = Int(CMTimeGetSeconds(asset.duration) * 1000)
+        let fallbackMs = max(1, duration) * 1000
+        let durationMs = Int32(max(actualMs, fallbackMs))
+
         let message = V2NIMMessageCreator.createAudioMessage(filePath,
                                                              name: fileName,
                                                              sceneName: scene,
-                                                             duration: Int32(duration))
+                                                             duration: durationMs)
         let params = V2NIMSendMessageParams()
 
         NIMSDK.shared().v2MessageService.send(
@@ -398,6 +417,109 @@ class ZWB_ChatViewController: UIViewController {
         present(picker, animated: true)
     }
 
+    // MARK: - 语音播放
+
+    private func playAudioMessage(_ message: V2NIMMessage) {
+        guard let audio = message.attachment as? V2NIMMessageAudioAttachment else { return }
+        let messageId = message.messageClientId ?? message.messageServerId ?? UUID().uuidString
+
+        if playingAudioMessageClientId == messageId, audioPlayer?.isPlaying == true {
+            stopAudioPlayIfNeeded()
+            return
+        }
+
+        if let localPath = audio.path,
+           !localPath.isEmpty,
+           FileManager.default.fileExists(atPath: localPath) {
+            startAudioPlay(filePath: localPath, messageId: messageId)
+            return
+        }
+
+        if let fallback = buildAudioCachePath(attachment: audio, messageId: messageId),
+           FileManager.default.fileExists(atPath: fallback) {
+            startAudioPlay(filePath: fallback, messageId: messageId)
+            return
+        }
+
+        guard let url = audio.url, !url.isEmpty else {
+            showHint("语音文件不存在")
+            return
+        }
+
+        if downloadingAudioMessageClientIds.contains(messageId) {
+            showHint("语音下载中...")
+            return
+        }
+
+        guard let saveAs = buildAudioCachePath(attachment: audio, messageId: messageId) else {
+            showHint("语音路径错误")
+            return
+        }
+
+        downloadingAudioMessageClientIds.insert(messageId)
+        showHint("正在下载语音...")
+        NIMSDK.shared().v2StorageService.downloadFile(url,
+                                                      filePath: saveAs) { [weak self] _ in
+            guard let self = self else { return }
+            self.downloadingAudioMessageClientIds.remove(messageId)
+            self.startAudioPlay(filePath: saveAs, messageId: messageId)
+        } failure: { [weak self] error in
+            guard let self = self else { return }
+            self.downloadingAudioMessageClientIds.remove(messageId)
+            self.showHint("语音下载失败: \(error.desc ?? "")")
+        } progress: { _ in }
+    }
+
+    private func buildAudioCachePath(attachment: V2NIMMessageAudioAttachment, messageId: String) -> String? {
+        let ext = attachment.ext?.isEmpty == false ? attachment.ext! : "aac"
+        let dir = (NSSearchPathForDirectoriesInDomains(.cachesDirectory, .userDomainMask, true).first ?? NSTemporaryDirectory())
+            .appending("/zwb_audio")
+        if !FileManager.default.fileExists(atPath: dir) {
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        }
+        let file = "\(messageId).\(ext)"
+        return (dir as NSString).appendingPathComponent(file)
+    }
+
+    private func startAudioPlay(filePath: String, messageId: String) {
+        stopAudioPlayIfNeeded()
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .default, options: .defaultToSpeaker)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
+
+            let player = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: filePath))
+            player.delegate = self
+            player.prepareToPlay()
+            if player.play() {
+                audioPlayer = player
+                playingAudioMessageClientId = messageId
+                refreshAudioPlayAnimations()
+            } else {
+                showHint("语音播放失败")
+            }
+        } catch {
+            showHint("语音播放失败")
+        }
+    }
+
+    private func stopAudioPlayIfNeeded() {
+        audioPlayer?.stop()
+        audioPlayer = nil
+        playingAudioMessageClientId = nil
+        refreshAudioPlayAnimations()
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func refreshAudioPlayAnimations() {
+        for cell in tableView.visibleCells {
+            guard let audioCell = cell as? ZWB_DefaultMessageCell else { continue }
+            let isPlaying = audioCell.audioMessageId != nil && audioCell.audioMessageId == playingAudioMessageClientId
+            audioCell.setAudioPlaying(isPlaying)
+        }
+    }
+
     // MARK: - 追加新消息到列表末尾
 
     /// 收到新消息或发送成功后调用，判断是否需要先插入时间戳
@@ -437,6 +559,95 @@ class ZWB_ChatViewController: UIViewController {
         tableView.scrollToRow(at: indexPath, at: .bottom, animated: animated)
     }
 
+    private func bindCommonCellEvents(_ cell: ZWB_BaseChatCell, message: V2NIMMessage) {
+        let senderId = message.senderId ?? ""
+        cell.onAvatarTapped = { [weak self] in
+            self?.handleAvatarTap(senderId: senderId)
+        }
+    }
+
+    private func handleAvatarTap(senderId: String) {
+        // 预留：后续可在这里跳转个人资料页/弹出名片
+        print("[ZWB_Chat] avatar tapped: \(senderId)")
+    }
+
+    private func previewImageMessage(_ message: V2NIMMessage, preferredImage: UIImage?) {
+        if let image = preferredImage {
+            presentImagePreview(image)
+            return
+        }
+
+        guard let att = message.attachment as? V2NIMMessageImageAttachment else {
+            showHint("图片加载失败")
+            return
+        }
+
+        if let path = att.path,
+           !path.isEmpty,
+           FileManager.default.fileExists(atPath: path),
+           let image = UIImage(contentsOfFile: path) {
+            presentImagePreview(image)
+            return
+        }
+
+        if let urlStr = att.url,
+           let url = URL(string: urlStr) {
+            showHint("正在加载图片...")
+            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+                guard let self = self else { return }
+                guard let data = data, let image = UIImage(data: data) else {
+                    DispatchQueue.main.async { self.showHint("图片加载失败") }
+                    return
+                }
+                DispatchQueue.main.async {
+                    self.presentImagePreview(image)
+                }
+            }.resume()
+            return
+        }
+
+        showHint("图片加载失败")
+    }
+
+    private func presentImagePreview(_ image: UIImage) {
+        removeImagePreviewOverlay()
+
+        let overlay = UIView(frame: view.bounds)
+        overlay.backgroundColor = UIColor.black.withAlphaComponent(0.95)
+        overlay.alpha = 0
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+        let imageView = UIImageView(image: image)
+        imageView.frame = overlay.bounds
+        imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = true
+        overlay.addSubview(imageView)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissImagePreview))
+        overlay.addGestureRecognizer(tap)
+
+        view.addSubview(overlay)
+        imagePreviewOverlay = overlay
+        UIView.animate(withDuration: 0.18) {
+            overlay.alpha = 1
+        }
+    }
+
+    @objc private func dismissImagePreview() {
+        removeImagePreviewOverlay()
+    }
+
+    private func removeImagePreviewOverlay() {
+        guard let overlay = imagePreviewOverlay else { return }
+        imagePreviewOverlay = nil
+        UIView.animate(withDuration: 0.16, animations: {
+            overlay.alpha = 0
+        }) { _ in
+            overlay.removeFromSuperview()
+        }
+    }
+
     // MARK: - 提示
 
     private func showHint(_ message: String) {
@@ -473,11 +684,27 @@ extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
             case .MESSAGE_TYPE_TEXT:
                 let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_TextMessageCell.reuseId, for: indexPath) as! ZWB_TextMessageCell
                 cell.configure(message: msg, isSend: isSend)
+                bindCommonCellEvents(cell, message: msg)
                 return cell
 
             case .MESSAGE_TYPE_IMAGE:
                 let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageMessageCell.reuseId, for: indexPath) as! ZWB_ImageMessageCell
                 cell.configure(message: msg, isSend: isSend)
+                bindCommonCellEvents(cell, message: msg)
+                cell.onImageTapped = { [weak self, weak cell] image in
+                    self?.previewImageMessage(msg, preferredImage: image ?? cell?.imageForPreview)
+                }
+                return cell
+
+            case .MESSAGE_TYPE_AUDIO:
+                let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
+                cell.configure(message: msg, isSend: isSend)
+                bindCommonCellEvents(cell, message: msg)
+                let msgId = msg.messageClientId ?? msg.messageServerId
+                cell.setAudioPlaying(msgId != nil && msgId == playingAudioMessageClientId)
+                cell.onAudioTapped = { [weak self] in
+                    self?.playAudioMessage(msg)
+                }
                 return cell
 
             // 自定义消息：根据 cellType 分发到对应 Cell
@@ -488,16 +715,19 @@ extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
                     let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageTextCell.reuseId, for: indexPath) as! ZWB_ImageTextCell
                     cell.applyLayout(isSend: isSend, senderId: msg.senderId ?? "")
                     cell.configure(attachment: att!, isSend: isSend)
+                    bindCommonCellEvents(cell, message: msg)
                     return cell
                 default:
                     let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
                     cell.configure(message: msg, isSend: isSend)
+                    bindCommonCellEvents(cell, message: msg)
                     return cell
                 }
 
             default:
                 let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
                 cell.configure(message: msg, isSend: isSend)
+                bindCommonCellEvents(cell, message: msg)
                 return cell
             }
         }
@@ -532,6 +762,19 @@ extension ZWB_ChatViewController: UIImagePickerControllerDelegate, UINavigationC
             }
             self?.sendImage(image)
         }
+    }
+}
+
+// MARK: - AVAudioPlayerDelegate
+
+extension ZWB_ChatViewController: AVAudioPlayerDelegate {
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        stopAudioPlayIfNeeded()
+    }
+
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        stopAudioPlayIfNeeded()
     }
 }
 

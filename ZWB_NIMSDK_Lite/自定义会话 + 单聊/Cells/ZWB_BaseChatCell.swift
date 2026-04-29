@@ -21,6 +21,9 @@ import Kingfisher
 
 class ZWB_BaseChatCell: UITableViewCell {
 
+    /// 头像点击回调（具体业务由外层页面处理）
+    var onAvatarTapped: (() -> Void)?
+
     // MARK: - 公共控件（子类可直接访问）
 
     /// 头像视图，圆形，默认显示系统占位图
@@ -58,6 +61,8 @@ class ZWB_BaseChatCell: UITableViewCell {
         selectionStyle  = .none
         contentView.addSubview(avatarView)
         contentView.addSubview(bubbleView)
+        avatarView.isUserInteractionEnabled = true
+        avatarView.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(avatarTapped)))
         setupConstraints()
     }
 
@@ -115,5 +120,9 @@ class ZWB_BaseChatCell: UITableViewCell {
         } else {
             avatarView.image = UIImage(systemName: "person.circle.fill")
         }
+    }
+
+    @objc private func avatarTapped() {
+        onAvatarTapped?()
     }
 }

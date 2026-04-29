@@ -18,6 +18,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // 全局键盘管理
         IQKeyboardManager.shared().isEnabled = true
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKickedOffline(_:)),
+            name: .zwbIMKickedOffline,
+            object: nil
+        )
 
         let appKey  = UserDefaults.standard.string(forKey: "zwb_appKey") ?? ""
         let cerName = UserDefaults.standard.string(forKey: "zwb_cerName")
@@ -55,5 +61,37 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
 
         window?.makeKeyAndVisible()
         return true
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleKickedOffline(_ notification: Notification) {
+        let detail = notification.object as? V2NIMKickedOfflineDetail
+        let reason = detail?.reasonDesc?.isEmpty == false ? (detail?.reasonDesc ?? "") : "当前账号已在其他设备登录"
+        gotoLoginPage(message: reason)
+    }
+
+    private func gotoLoginPage(message: String?) {
+        DispatchQueue.main.async {
+            UserDefaults.standard.removeObject(forKey: "zwb_account")
+            UserDefaults.standard.removeObject(forKey: "zwb_token")
+
+            let nav = UINavigationController(rootViewController: ZWB_LoginViewController())
+            guard let window = self.window else { return }
+            window.rootViewController = nav
+            window.makeKeyAndVisible()
+            UIView.transition(with: window,
+                              duration: 0.25,
+                              options: .transitionCrossDissolve,
+                              animations: nil)
+
+            if let message = message, !message.isEmpty {
+                let alert = UIAlertController(title: "提示", message: message, preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "确定", style: .default))
+                nav.present(alert, animated: true)
+            }
+        }
     }
 }
