@@ -11,26 +11,46 @@ import UIKit
 import NIMSDK
 import SnapKit
 
+// MARK: - 列表数据项枚举
+
+/// 消息列表的数据单元，区分普通消息和时间戳占位
+enum ZWB_ChatItem {
+    /// 普通消息
+    case message(V2NIMMessage)
+    /// 时间戳占位（毫秒级时间戳），相邻消息超过阈值时插入
+    case timestamp(TimeInterval)
+}
+
+// MARK: - ZWB_ChatViewController
+
 class ZWB_ChatViewController: UIViewController {
 
     // MARK: - 属性
 
+    /// 当前会话 ID
     private let conversationId: String
-    private var messages: [V2NIMMessage] = []
-    private var isLoadingMore = false
+
+    /// 列表数据源，包含消息和时间戳占位
+    private var items: [ZWB_ChatItem] = []
+
+    /// 相邻消息超过此时间差（秒）则插入时间戳，默认 5 分钟
+    private let timestampThreshold: TimeInterval = 5 * 60
 
     // MARK: - UI
 
     private lazy var tableView: UITableView = {
         let tv = UITableView(frame: .zero, style: .plain)
-        tv.delegate        = self
-        tv.dataSource      = self
-        tv.separatorStyle  = .none
-        tv.backgroundColor = UIColor(red: 0.94, green: 0.94, blue: 0.96, alpha: 1)
+        tv.delegate            = self
+        tv.dataSource          = self
+        tv.separatorStyle      = .none
+        tv.backgroundColor     = UIColor(red: 0.94, green: 0.94, blue: 0.96, alpha: 1)
         tv.keyboardDismissMode = .interactive
+        // 注册所有消息 Cell 类型
+        tv.register(ZWB_TimeCell.self,          forCellReuseIdentifier: ZWB_TimeCell.reuseId)
         tv.register(ZWB_TextMessageCell.self,   forCellReuseIdentifier: ZWB_TextMessageCell.reuseId)
         tv.register(ZWB_ImageMessageCell.self,  forCellReuseIdentifier: ZWB_ImageMessageCell.reuseId)
-        tv.register(ZWB_CustomMessageCell.self, forCellReuseIdentifier: ZWB_CustomMessageCell.reuseId)
+        tv.register(ZWB_ImageTextCell.self,     forCellReuseIdentifier: ZWB_ImageTextCell.reuseId)
+        tv.register(ZWB_CustomCell.self,        forCellReuseIdentifier: ZWB_CustomCell.reuseId)
         tv.register(ZWB_DefaultMessageCell.self,forCellReuseIdentifier: ZWB_DefaultMessageCell.reuseId)
         return tv
     }()
@@ -41,10 +61,14 @@ class ZWB_ChatViewController: UIViewController {
         return bar
     }()
 
+    /// inputBar 底部约束，键盘弹出时动态更新
     private var inputBarBottom: Constraint?
 
     // MARK: - Init
 
+    /// - Parameters:
+    ///   - conversationId: 云信会话 ID
+    ///   - title: 导航栏标题，默认显示 conversationId
     init(conversationId: String, title: String = "") {
         self.conversationId = conversationId
         super.init(nibName: nil, bundle: nil)
@@ -62,7 +86,7 @@ class ZWB_ChatViewController: UIViewController {
         setupKeyboardObservers()
         addMessageListener()
 
-        // 检查主数据是否已同步，已同步直接拉，否则等 onDataSync
+        // 检查主数据是否已同步（V2NIM_DATA_SYNC_TYPE_MAIN=1, V2NIM_DATA_SYNC_STATE_COMPLETED=3）
         let alreadySynced = NIMSDK.shared().v2LoginService.getDataSync()?
             .first(where: { $0.type.rawValue == 1 })?
             .state.rawValue == 3
@@ -108,18 +132,22 @@ class ZWB_ChatViewController: UIViewController {
     // MARK: - 键盘处理
 
     private func setupKeyboardObservers() {
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChange(_:)),
-                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(keyboardWillChange(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification,
+            object: nil
+        )
     }
 
     @objc private func keyboardWillChange(_ note: Notification) {
-        guard let info = note.userInfo,
+        guard let info     = note.userInfo,
               let endFrame = info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
               let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
 
         let keyboardHeight = max(0, UIScreen.main.bounds.height - endFrame.origin.y)
-        let safeBottom = view.safeAreaInsets.bottom
-        let offset = keyboardHeight > 0 ? -(keyboardHeight - safeBottom) : 0
+        let safeBottom     = view.safeAreaInsets.bottom
+        let offset         = keyboardHeight > 0 ? -(keyboardHeight - safeBottom) : 0
 
         UIView.animate(withDuration: duration) {
             self.inputBarBottom?.update(offset: offset)
@@ -127,6 +155,28 @@ class ZWB_ChatViewController: UIViewController {
         } completion: { _ in
             self.scrollToBottom(animated: false)
         }
+    }
+
+    // MARK: - 时间戳插入逻辑
+
+    /// 将消息数组转换为含时间戳占位的 ZWB_ChatItem 数组
+    /// 相邻两条消息时间差超过 timestampThreshold 时，在前一条消息后插入时间戳
+    /// - Parameter messages: 按时间正序排列的消息数组
+    /// - Returns: 插入时间戳后的数据源数组
+    private func buildChatItems(from messages: [V2NIMMessage]) -> [ZWB_ChatItem] {
+        var result: [ZWB_ChatItem] = []
+        var lastTimestamp: TimeInterval = 0
+
+        for msg in messages {
+            // createTime 是秒级 NSTimeInterval，直接与阈值比较
+            let t = msg.createTime
+            if t - lastTimestamp > timestampThreshold {
+                result.append(.timestamp(msg.createTime))
+                lastTimestamp = t
+            }
+            result.append(.message(msg))
+        }
+        return result
     }
 
     // MARK: - 加载历史消息
@@ -140,7 +190,8 @@ class ZWB_ChatViewController: UIViewController {
 
         NIMSDK.shared().v2MessageService.getMessageList(option) { [weak self] result in
             guard let self = self else { return }
-            self.messages = result.reversed()
+            // SDK 返回从新到旧，reversed() 后变为时间正序
+            self.items = self.buildChatItems(from: result.reversed())
             DispatchQueue.main.async {
                 self.tableView.reloadData()
                 self.scrollToBottom(animated: false)
@@ -180,24 +231,46 @@ class ZWB_ChatViewController: UIViewController {
             guard let msg = result.message else { return }
             DispatchQueue.main.async { self?.appendMessage(msg) }
         } failure: { error in
-            print("[ZWB_Chat] 发送失败: \(error)")
+            print("[ZWB_Chat] 发送失败: \(error.desc ?? "")")
         } progress: { _ in }
     }
 
-    // MARK: - 追加消息到列表
+    // MARK: - 追加新消息到列表末尾
 
+    /// 收到新消息或发送成功后调用，判断是否需要先插入时间戳
     private func appendMessage(_ msg: V2NIMMessage) {
-        messages.append(msg)
-        let indexPath = IndexPath(row: messages.count - 1, section: 0)
-        tableView.insertRows(at: [indexPath], with: .bottom)
+        var newItems: [ZWB_ChatItem] = []
+
+        // 取当前最后一条消息的时间，判断是否需要插入时间戳
+        let lastMsgTime: TimeInterval = {
+            for item in items.reversed() {
+                if case .message(let m) = item {
+                    return m.createTime
+                }
+            }
+            return 0
+        }()
+
+        let newMsgTime = msg.createTime
+        if newMsgTime - lastMsgTime > timestampThreshold {
+            newItems.append(.timestamp(msg.createTime))
+        }
+        newItems.append(.message(msg))
+
+        // 计算插入位置
+        let startIndex = items.count
+        items.append(contentsOf: newItems)
+
+        let indexPaths = (startIndex ..< items.count).map { IndexPath(row: $0, section: 0) }
+        tableView.insertRows(at: indexPaths, with: .bottom)
         scrollToBottom(animated: true)
     }
 
     // MARK: - 滚动到底部
 
     private func scrollToBottom(animated: Bool) {
-        guard messages.count > 0 else { return }
-        let indexPath = IndexPath(row: messages.count - 1, section: 0)
+        guard !items.isEmpty else { return }
+        let indexPath = IndexPath(row: items.count - 1, section: 0)
         tableView.scrollToRow(at: indexPath, at: .bottom, animated: animated)
     }
 }
@@ -207,34 +280,58 @@ class ZWB_ChatViewController: UIViewController {
 extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        return messages.count
+        return items.count
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let msg = messages[indexPath.row]
-        let isSend = msg.senderId == ZWB_IMManager.shared.currentAccount
+        switch items[indexPath.row] {
 
-        switch msg.messageType {
-        case .MESSAGE_TYPE_TEXT:
-            let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_TextMessageCell.reuseId, for: indexPath) as! ZWB_TextMessageCell
-            cell.configure(message: msg, isSend: isSend)
+        // 时间戳占位行
+        case .timestamp(let time):
+            let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_TimeCell.reuseId, for: indexPath) as! ZWB_TimeCell
+            cell.configure(timestamp: time)
             return cell
-        case .MESSAGE_TYPE_IMAGE:
-            let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageMessageCell.reuseId, for: indexPath) as! ZWB_ImageMessageCell
-            cell.configure(message: msg, isSend: isSend)
-            return cell
-        case .MESSAGE_TYPE_CUSTOM:
-            let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_CustomMessageCell.reuseId, for: indexPath) as! ZWB_CustomMessageCell
-            cell.configure(message: msg, isSend: isSend)
-            return cell
-        default:
-            let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
-            cell.configure(message: msg, isSend: isSend)
-            return cell
+
+        // 普通消息行
+        case .message(let msg):
+            let isSend = msg.senderId == ZWB_IMManager.shared.currentAccount
+
+            switch msg.messageType {
+            case .MESSAGE_TYPE_TEXT:
+                let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_TextMessageCell.reuseId, for: indexPath) as! ZWB_TextMessageCell
+                cell.configure(message: msg, isSend: isSend)
+                return cell
+
+            case .MESSAGE_TYPE_IMAGE:
+                let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageMessageCell.reuseId, for: indexPath) as! ZWB_ImageMessageCell
+                cell.configure(message: msg, isSend: isSend)
+                return cell
+
+            // 自定义消息：根据 cellType 分发到对应 Cell
+            case .MESSAGE_TYPE_CUSTOM:
+                let att = msg.attachment as? ZWB_CustomAttachment
+                switch att?.cellType {
+                case .imageText:
+                    let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageTextCell.reuseId, for: indexPath) as! ZWB_ImageTextCell
+                    cell.configure(attachment: att!, isSend: isSend)
+                    return cell
+                default:
+                    let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
+                    cell.configure(message: msg, isSend: isSend)
+                    return cell
+                }
+
+            default:
+                let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_DefaultMessageCell.reuseId, for: indexPath) as! ZWB_DefaultMessageCell
+                cell.configure(message: msg, isSend: isSend)
+                return cell
+            }
         }
     }
 
     func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+        // 时间戳行高度固定较小，消息行估算 80
+        if case .timestamp = items[indexPath.row] { return 36 }
         return 80
     }
 
@@ -247,6 +344,7 @@ extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
 
 extension ZWB_ChatViewController: V2NIMMessageListener {
 
+    /// 收到新消息
     @objc func onReceive(_ messages: [V2NIMMessage]) {
         let filtered = messages.filter { $0.conversationId == self.conversationId }
         guard !filtered.isEmpty else { return }
@@ -256,14 +354,15 @@ extension ZWB_ChatViewController: V2NIMMessageListener {
         }
     }
 
-    @objc func onSend(_ message: V2NIMMessage) {
-        // 发送状态更新，可在此刷新对应 cell
-    }
+    /// 消息发送状态变化（可在此刷新对应 cell 的发送状态图标）
+    @objc func onSend(_ message: V2NIMMessage) {}
 
+    /// 消息被撤回，重新加载历史
     @objc func onMessageRevokeNotifications(_ revokeNotifications: [V2NIMMessageRevokeNotification]) {
         DispatchQueue.main.async { self.loadHistory() }
     }
 
+    /// 消息被删除，重新加载历史
     @objc func onMessageDeletedNotifications(_ messageDeletedNotifications: [V2NIMMessageDeletedNotification]) {
         DispatchQueue.main.async { self.loadHistory() }
     }
