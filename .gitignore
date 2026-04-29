@@ -9,9 +9,8 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
-# CocoaPods
+# CocoaPods — 只忽略 Pods 目录，保留 Podfile.lock 和 .xcworkspace
 Pods/
-*.xcworkspace
 
 # macOS
 .DS_Store

@@ -1,17 +1,15 @@
 platform :ios, '13.0'
 
-target 'ZWB_NIMSDK_CustomCell' do
+target 'ZWB_NIMSDK_Lite' do
   use_frameworks!
 
-  pod 'NEChatKit',      '10.9.10'
+  # 云信 IM 核心 SDK（纯数据层，不含任何 UIKit/Kit 封装）
+  pod 'NIMSDK_LITE', '10.9.71'
 
-  # 本地源码，方便修改（首次使用需执行 scripts/setup_local_pods.sh）
-  pod 'NEChatUIKit',              :path => './LocalPods/NEChatUIKit'
-  pod 'NELocalConversationUIKit', :path => './LocalPods/NELocalConversationUIKit'
-  pod 'NEContactUIKit',           :path => './LocalPods/NEContactUIKit'
-
+  # 图片加载 / 布局
   pod 'Kingfisher', '~> 7.0'
   pod 'SnapKit',    '~> 5.0'
+  pod 'IQKeyboardManager'
 
 end
 
