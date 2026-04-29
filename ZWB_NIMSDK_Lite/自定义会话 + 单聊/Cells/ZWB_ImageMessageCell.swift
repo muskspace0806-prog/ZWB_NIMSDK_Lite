@@ -9,6 +9,7 @@
 import UIKit
 import NIMSDK
 import SnapKit
+import Kingfisher
 
 class ZWB_ImageMessageCell: ZWB_BaseChatCell {
 
@@ -48,7 +49,7 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
     ///   - message: 云信消息对象，attachment 为 V2NIMMessageImageAttachment
     ///   - isSend: 是否为发送方消息
     func configure(message: V2NIMMessage, isSend: Bool) {
-        applyLayout(isSend: isSend)
+        applyLayout(isSend: isSend, senderId: message.senderId ?? "")
         bubbleView.backgroundColor = .clear  // 图片消息气泡透明，不显示背景色
 
         guard let att    = message.attachment as? V2NIMMessageImageAttachment,
@@ -57,12 +58,6 @@ class ZWB_ImageMessageCell: ZWB_BaseChatCell {
             photoView.image = UIImage(systemName: "photo")
             return
         }
-
-        // 异步加载图片
-        URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            if let data = data, let img = UIImage(data: data) {
-                DispatchQueue.main.async { self?.photoView.image = img }
-            }
-        }.resume()
+        photoView.kf.setImage(with: url, placeholder: UIImage(systemName: "photo"))
     }
 }

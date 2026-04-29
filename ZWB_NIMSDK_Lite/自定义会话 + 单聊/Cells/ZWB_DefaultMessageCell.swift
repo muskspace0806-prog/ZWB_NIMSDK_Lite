@@ -46,7 +46,7 @@ class ZWB_DefaultMessageCell: ZWB_BaseChatCell {
     ///   - message: 云信消息对象
     ///   - isSend: 是否为发送方消息
     func configure(message: V2NIMMessage, isSend: Bool) {
-        applyLayout(isSend: isSend)
+        applyLayout(isSend: isSend, senderId: message.senderId ?? "")
         switch message.messageType {
         case .MESSAGE_TYPE_AUDIO:    typeLabel.text = "[语音消息]"
         case .MESSAGE_TYPE_VIDEO:    typeLabel.text = "[视频消息]"

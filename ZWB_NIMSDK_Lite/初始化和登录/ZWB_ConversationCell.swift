@@ -6,6 +6,9 @@
 //
 
 import UIKit
+import NIMSDK
+import SnapKit
+import Kingfisher
 
 // MARK: - Cell
 
@@ -94,20 +97,40 @@ class ZWB_ConversationCell: UITableViewCell {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(with item: ZWB_ConversationItem) {
-        nameLabel.text    = item.name
-        lastMsgLabel.text = item.lastMessage
-        timeLabel.text    = item.lastTime
+        nameLabel.text      = item.name
+        lastMsgLabel.text   = item.lastMessage
+        timeLabel.text      = item.lastTime
         badgeLabel.isHidden = item.unreadCount == 0
         if item.unreadCount > 0 {
             badgeLabel.text = item.unreadCount > 99 ? "99+" : "\(item.unreadCount)"
         }
+
+        // 每次复用先重置为默认头像，防止复用时显示上一行的头像
         avatarView.image = UIImage(systemName: "person.circle.fill")
-        if let urlStr = item.avatarUrl, let url = URL(string: urlStr) {
-            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                if let data = data, let img = UIImage(data: data) {
-                    DispatchQueue.main.async { self?.avatarView.image = img }
-                }
-            }.resume()
+        // 用 conversationId 作为 tag，异步回调时校验是否还是同一行
+        let currentId = item.conversationId
+        avatarView.accessibilityIdentifier = currentId
+
+        let loadAvatar: (String) -> Void = { [weak self] urlStr in
+            guard let url = URL(string: urlStr) else { return }
+            self?.avatarView.kf.setImage(with: url, placeholder: UIImage(systemName: "person.circle.fill"))
         }
+
+        if let urlStr = item.avatarUrl, !urlStr.isEmpty {
+            loadAvatar(urlStr)
+        } else {
+            loadUserAvatar(conversationId: item.conversationId, load: loadAvatar)
+        }
+    }
+
+    /// 从 conversationId 解析对方 accid，查询用户头像 URL 后回调加载
+    private func loadUserAvatar(conversationId: String, load: @escaping (String) -> Void) {
+        let parts = conversationId.split(separator: "|")
+        guard parts.count >= 3, String(parts[1]) == "1" else { return }
+
+        let accid = String(parts[0])
+        let user  = NIMSDK.shared().v2UserService.getUserInfo(accid, error: nil)
+        guard let urlStr = user.avatar, !urlStr.isEmpty else { return }
+        load(urlStr)
     }
 }

@@ -313,6 +313,7 @@ extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
                 switch att?.cellType {
                 case .imageText:
                     let cell = tableView.dequeueReusableCell(withIdentifier: ZWB_ImageTextCell.reuseId, for: indexPath) as! ZWB_ImageTextCell
+                    cell.applyLayout(isSend: isSend, senderId: msg.senderId ?? "")
                     cell.configure(attachment: att!, isSend: isSend)
                     return cell
                 default:

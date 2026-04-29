@@ -46,7 +46,7 @@ class ZWB_TextMessageCell: ZWB_BaseChatCell {
     ///   - message: 云信消息对象
     ///   - isSend: 是否为发送方消息
     func configure(message: V2NIMMessage, isSend: Bool) {
-        applyLayout(isSend: isSend)
+        applyLayout(isSend: isSend, senderId: message.senderId ?? "")
         msgLabel.text = message.text ?? ""
     }
 }

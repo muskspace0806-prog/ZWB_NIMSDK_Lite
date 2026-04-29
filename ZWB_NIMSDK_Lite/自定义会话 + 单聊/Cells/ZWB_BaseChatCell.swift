@@ -15,7 +15,9 @@
 //
 
 import UIKit
+import NIMSDK
 import SnapKit
+import Kingfisher
 
 class ZWB_BaseChatCell: UITableViewCell {
 
@@ -84,19 +86,34 @@ class ZWB_BaseChatCell: UITableViewCell {
 
     // MARK: - 切换左右布局
 
-    /// 根据消息方向切换头像和气泡的左右位置及颜色
-    /// - Parameter isSend: true = 发送方（右侧绿色气泡），false = 接收方（左侧白色气泡）
-    func applyLayout(isSend: Bool) {
+    /// 根据消息方向切换头像和气泡的左右位置及颜色，同时加载发送者头像
+    /// - Parameters:
+    ///   - isSend: true = 发送方（右侧绿色气泡），false = 接收方（左侧白色气泡）
+    ///   - senderId: 消息发送者 accid，用于查询头像
+    func applyLayout(isSend: Bool, senderId: String = "") {
         if isSend {
-            // 发送方：头像靠右，气泡靠右，绿色背景
             avatarLeading?.deactivate();  avatarTrailing?.activate()
             bubbleLeading?.deactivate();  bubbleTrailing?.activate()
             bubbleView.backgroundColor = UIColor(red: 0.56, green: 0.85, blue: 0.44, alpha: 1)
         } else {
-            // 接收方：头像靠左，气泡靠左，白色背景
             avatarTrailing?.deactivate(); avatarLeading?.activate()
             bubbleTrailing?.deactivate(); bubbleLeading?.activate()
             bubbleView.backgroundColor = .white
+        }
+        loadAvatar(accountId: senderId)
+    }
+
+    /// 根据 accid 查询用户头像并加载，Kingfisher 自动处理缓存和复用取消
+    private func loadAvatar(accountId: String) {
+        guard !accountId.isEmpty else {
+            avatarView.image = UIImage(systemName: "person.circle.fill")
+            return
+        }
+        let user = NIMSDK.shared().v2UserService.getUserInfo(accountId, error: nil)
+        if let urlStr = user.avatar, !urlStr.isEmpty, let url = URL(string: urlStr) {
+            avatarView.kf.setImage(with: url, placeholder: UIImage(systemName: "person.circle.fill"))
+        } else {
+            avatarView.image = UIImage(systemName: "person.circle.fill")
         }
     }
 }

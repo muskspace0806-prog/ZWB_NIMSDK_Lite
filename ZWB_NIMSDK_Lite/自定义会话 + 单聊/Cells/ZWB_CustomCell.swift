@@ -9,6 +9,7 @@
 import UIKit
 import NIMSDK
 import SnapKit
+import Kingfisher
 
 class ZWB_CustomCell: ZWB_BaseChatCell {
 
@@ -54,12 +55,9 @@ class ZWB_CustomCell: ZWB_BaseChatCell {
 
         descLabel.text = attachment.desc
 
+        // Kingfisher 加载图片，自动缓存
         if let urlStr = attachment.picUrl, let url = URL(string: urlStr) {
-            URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-                if let data = data, let img = UIImage(data: data) {
-                    DispatchQueue.main.async { self?.photoView.image = img }
-                }
-            }.resume()
+            photoView.kf.setImage(with: url, placeholder: UIImage(systemName: "photo"))
         } else {
             photoView.image = UIImage(systemName: "photo")
         }
