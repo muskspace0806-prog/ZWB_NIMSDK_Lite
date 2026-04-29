@@ -10,6 +10,7 @@
 import UIKit
 import NIMSDK
 import SnapKit
+import TZImagePickerController
 
 // MARK: - 列表数据项枚举
 
@@ -36,28 +37,33 @@ class ZWB_ChatViewController: UIViewController {
     /// 相邻消息超过此时间差（秒）则插入时间戳，默认 5 分钟
     private let timestampThreshold: TimeInterval = 5 * 60
 
+    /// 语音录制器
+    private let voiceRecorder = ZWB_VoiceRecorder()
+
     // MARK: - UI
 
     private lazy var tableView: UITableView = {
         let tv = UITableView(frame: .zero, style: .plain)
-        tv.delegate            = self
-        tv.dataSource          = self
-        tv.separatorStyle      = .none
-        tv.backgroundColor     = UIColor(red: 0.94, green: 0.94, blue: 0.96, alpha: 1)
+        tv.delegate = self
+        tv.dataSource = self
+        tv.separatorStyle = .none
+        tv.backgroundColor = UIColor(red: 0.94, green: 0.94, blue: 0.96, alpha: 1)
         tv.keyboardDismissMode = .interactive
         // 注册所有消息 Cell 类型
-        tv.register(ZWB_TimeCell.self,          forCellReuseIdentifier: ZWB_TimeCell.reuseId)
-        tv.register(ZWB_TextMessageCell.self,   forCellReuseIdentifier: ZWB_TextMessageCell.reuseId)
-        tv.register(ZWB_ImageMessageCell.self,  forCellReuseIdentifier: ZWB_ImageMessageCell.reuseId)
-        tv.register(ZWB_ImageTextCell.self,     forCellReuseIdentifier: ZWB_ImageTextCell.reuseId)
-        tv.register(ZWB_CustomCell.self,        forCellReuseIdentifier: ZWB_CustomCell.reuseId)
-        tv.register(ZWB_DefaultMessageCell.self,forCellReuseIdentifier: ZWB_DefaultMessageCell.reuseId)
+        tv.register(ZWB_TimeCell.self, forCellReuseIdentifier: ZWB_TimeCell.reuseId)
+        tv.register(ZWB_TextMessageCell.self, forCellReuseIdentifier: ZWB_TextMessageCell.reuseId)
+        tv.register(ZWB_ImageMessageCell.self, forCellReuseIdentifier: ZWB_ImageMessageCell.reuseId)
+        tv.register(ZWB_ImageTextCell.self, forCellReuseIdentifier: ZWB_ImageTextCell.reuseId)
+        tv.register(ZWB_CustomCell.self, forCellReuseIdentifier: ZWB_CustomCell.reuseId)
+        tv.register(ZWB_DefaultMessageCell.self, forCellReuseIdentifier: ZWB_DefaultMessageCell.reuseId)
         return tv
     }()
 
     private lazy var inputBar: ZWB_InputBar = {
         let bar = ZWB_InputBar()
         bar.onSend = { [weak self] text in self?.sendText(text) }
+        bar.onMediaTapped = { [weak self] in self?.presentMediaSheet() }
+        bar.onVoiceRecordEvent = { [weak self] event in self?.handleVoiceRecord(event) }
         return bar
     }()
 
@@ -84,6 +90,7 @@ class ZWB_ChatViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.94, green: 0.94, blue: 0.96, alpha: 1)
         setupUI()
         setupKeyboardObservers()
+        setupVoiceRecorder()
         addMessageListener()
 
         // 检查主数据是否已同步（V2NIM_DATA_SYNC_TYPE_MAIN=1, V2NIM_DATA_SYNC_STATE_COMPLETED=3）
@@ -105,6 +112,9 @@ class ZWB_ChatViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         markAsRead()
+        if voiceRecorder.isRecording {
+            voiceRecorder.cancelRecording()
+        }
     }
 
     deinit {
@@ -121,12 +131,20 @@ class ZWB_ChatViewController: UIViewController {
         inputBar.snp.makeConstraints {
             $0.leading.trailing.equalToSuperview()
             inputBarBottom = $0.bottom.equalTo(view.safeAreaLayoutGuide).constraint
-            // 高度由 ZWB_InputBar 内部根据文字行数自动撑开，最小 56pt
+            // 高度由 ZWB_InputBar 内部根据输入模式自动撑开，最小 56pt
         }
         tableView.snp.makeConstraints {
             $0.top.leading.trailing.equalToSuperview()
             $0.bottom.equalTo(inputBar.snp.top)
         }
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTableTap))
+        tap.cancelsTouchesInView = false
+        tableView.addGestureRecognizer(tap)
+    }
+
+    @objc private func handleTableTap() {
+        inputBar.endInputEditing()
     }
 
     // MARK: - 键盘处理
@@ -141,19 +159,41 @@ class ZWB_ChatViewController: UIViewController {
     }
 
     @objc private func keyboardWillChange(_ note: Notification) {
-        guard let info     = note.userInfo,
+        guard let info = note.userInfo,
               let endFrame = info[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect,
               let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double else { return }
 
         let keyboardHeight = max(0, UIScreen.main.bounds.height - endFrame.origin.y)
-        let safeBottom     = view.safeAreaInsets.bottom
-        let offset         = keyboardHeight > 0 ? -(keyboardHeight - safeBottom) : 0
+        let safeBottom = view.safeAreaInsets.bottom
+        let offset = keyboardHeight > 0 ? -(keyboardHeight - safeBottom) : 0
 
         UIView.animate(withDuration: duration) {
             self.inputBarBottom?.update(offset: offset)
             self.view.layoutIfNeeded()
         } completion: { _ in
             self.scrollToBottom(animated: false)
+        }
+    }
+
+    // MARK: - 语音录制
+
+    private func setupVoiceRecorder() {
+        voiceRecorder.onFinished = { [weak self] result in
+            self?.sendAudio(filePath: result.filePath, duration: result.duration)
+        }
+        voiceRecorder.onFailed = { [weak self] msg in
+            self?.showHint(msg)
+        }
+    }
+
+    private func handleVoiceRecord(_ event: ZWB_InputBar.VoiceRecordEvent) {
+        switch event {
+        case .began:
+            voiceRecorder.startRecording()
+        case .ended:
+            voiceRecorder.stopRecording()
+        case .cancelled:
+            voiceRecorder.cancelRecording()
         }
     }
 
@@ -184,9 +224,9 @@ class ZWB_ChatViewController: UIViewController {
     private func loadHistory() {
         let option = V2NIMMessageListOption()
         option.conversationId = conversationId
-        option.limit          = 100
-        option.direction      = .QUERY_DIRECTION_DESC  // 从最新往旧，拿到后 reversed()
-        option.onlyQueryLocal = false                  // 必须 false，否则新账号本地无数据
+        option.limit = 100
+        option.direction = .QUERY_DIRECTION_DESC  // 从最新往旧，拿到后 reversed()
+        option.onlyQueryLocal = false             // 必须 false，否则新账号本地无数据
 
         NIMSDK.shared().v2MessageService.getMessageList(option) { [weak self] result in
             guard let self = self else { return }
@@ -220,7 +260,7 @@ class ZWB_ChatViewController: UIViewController {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        let params  = V2NIMSendMessageParams()
+        let params = V2NIMSendMessageParams()
         let message = V2NIMMessageCreator.createTextMessage(trimmed)
 
         NIMSDK.shared().v2MessageService.send(
@@ -231,8 +271,131 @@ class ZWB_ChatViewController: UIViewController {
             guard let msg = result.message else { return }
             DispatchQueue.main.async { self?.appendMessage(msg) }
         } failure: { error in
-            print("[ZWB_Chat] 发送失败: \(error.desc ?? "")")
+            print("[ZWB_Chat] 发送文本失败: \(error.desc ?? "")")
         } progress: { _ in }
+    }
+
+    // MARK: - 发送图片消息
+
+    private func sendImage(_ image: UIImage) {
+        guard let data = image.jpegData(compressionQuality: 0.88) else {
+            showHint("图片处理失败")
+            return
+        }
+
+        let fileName = "img_\(Int(Date().timeIntervalSince1970)).jpg"
+        let path = (NSTemporaryDirectory() as NSString).appendingPathComponent(fileName)
+
+        do {
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        } catch {
+            showHint("图片保存失败")
+            return
+        }
+
+        let width = Int32(max(1, Int(image.size.width)))
+        let height = Int32(max(1, Int(image.size.height)))
+        let scene = V2NIMStorageSceneConfig.default_IM().sceneName
+        let message = V2NIMMessageCreator.createImageMessage(path,
+                                                             name: fileName,
+                                                             sceneName: scene,
+                                                             width: width,
+                                                             height: height)
+        let params = V2NIMSendMessageParams()
+
+        NIMSDK.shared().v2MessageService.send(
+            message,
+            conversationId: conversationId,
+            params: params
+        ) { [weak self] result in
+            guard let msg = result.message else { return }
+            DispatchQueue.main.async { self?.appendMessage(msg) }
+        } failure: { [weak self] error in
+            self?.showHint("发送图片失败: \(error.desc ?? "")")
+        } progress: { _ in }
+    }
+
+    // MARK: - 发送语音消息
+
+    private func sendAudio(filePath: String, duration: Int) {
+        let fileName = (filePath as NSString).lastPathComponent
+        let scene = V2NIMStorageSceneConfig.default_IM().sceneName
+        let message = V2NIMMessageCreator.createAudioMessage(filePath,
+                                                             name: fileName,
+                                                             sceneName: scene,
+                                                             duration: Int32(duration))
+        let params = V2NIMSendMessageParams()
+
+        NIMSDK.shared().v2MessageService.send(
+            message,
+            conversationId: conversationId,
+            params: params
+        ) { [weak self] result in
+            guard let msg = result.message else { return }
+            DispatchQueue.main.async { self?.appendMessage(msg) }
+        } failure: { [weak self] error in
+            self?.showHint("发送语音失败: \(error.desc ?? "")")
+        } progress: { _ in }
+    }
+
+    // MARK: - 图片/拍照入口
+
+    private func presentMediaSheet() {
+        inputBar.endInputEditing()
+
+        let alert = UIAlertController(title: "发送图片", message: nil, preferredStyle: .actionSheet)
+
+        alert.addAction(UIAlertAction(title: "从相册选择", style: .default) { [weak self] _ in
+            self?.presentPhotoPicker()
+        })
+
+        alert.addAction(UIAlertAction(title: "拍照", style: .default) { [weak self] _ in
+            self?.presentImagePicker(source: .camera)
+        })
+
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = inputBar
+            popover.sourceRect = inputBar.bounds
+            popover.permittedArrowDirections = .down
+        }
+
+        present(alert, animated: true)
+    }
+
+    private func presentPhotoPicker() {
+        let picker = TZImagePickerController(maxImagesCount: 1, delegate: nil)
+        picker?.allowPickingVideo = false
+        picker?.allowPickingGif = false
+        picker?.allowCrop = false
+        picker?.showSelectBtn = false
+        picker?.allowPreview = false
+        picker?.autoDismiss = true
+        picker?.allowTakePicture = false
+        picker?.didFinishPickingPhotosHandle = { [weak self] photos, _, _ in
+            guard let self = self else { return }
+            guard let image = photos?.first else {
+                self.showHint("未获取到图片")
+                return
+            }
+            self.sendImage(image)
+        }
+        if let picker = picker {
+            present(picker, animated: true)
+        }
+    }
+
+    private func presentImagePicker(source: UIImagePickerController.SourceType) {
+        guard UIImagePickerController.isSourceTypeAvailable(source) else {
+            showHint("当前设备不支持相机")
+            return
+        }
+        let picker = UIImagePickerController()
+        picker.sourceType = source
+        picker.delegate = self
+        picker.allowsEditing = false
+        present(picker, animated: true)
     }
 
     // MARK: - 追加新消息到列表末尾
@@ -272,6 +435,16 @@ class ZWB_ChatViewController: UIViewController {
         guard !items.isEmpty else { return }
         let indexPath = IndexPath(row: items.count - 1, section: 0)
         tableView.scrollToRow(at: indexPath, at: .bottom, animated: animated)
+    }
+
+    // MARK: - 提示
+
+    private func showHint(_ message: String) {
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+        present(alert, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak alert] in
+            alert?.dismiss(animated: true)
+        }
     }
 }
 
@@ -338,6 +511,27 @@ extension ZWB_ChatViewController: UITableViewDataSource, UITableViewDelegate {
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         return UITableView.automaticDimension
+    }
+}
+
+// MARK: - UIImagePickerControllerDelegate
+
+extension ZWB_ChatViewController: UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
+    }
+
+    func imagePickerController(_ picker: UIImagePickerController,
+                               didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey : Any]) {
+        let image = (info[.editedImage] ?? info[.originalImage]) as? UIImage
+        picker.dismiss(animated: true) { [weak self] in
+            guard let image = image else {
+                self?.showHint("未获取到图片")
+                return
+            }
+            self?.sendImage(image)
+        }
     }
 }
 

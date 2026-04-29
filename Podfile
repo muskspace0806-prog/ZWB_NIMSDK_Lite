@@ -10,7 +10,7 @@ target 'ZWB_NIMSDK_Lite' do
   pod 'Kingfisher', '~> 7.0'
   pod 'SnapKit',    '~> 5.0'
   pod 'IQKeyboardManager'
-
+  pod 'TZImagePickerController/Basic'  #仅用最简单的功能,如果需要全功能就是使用这个 pod 'TZImagePickerController'
 end
 
 post_install do |installer|
