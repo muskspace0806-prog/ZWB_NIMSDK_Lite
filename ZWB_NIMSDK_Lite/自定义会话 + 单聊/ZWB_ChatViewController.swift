@@ -547,7 +547,9 @@ class ZWB_ChatViewController: UIViewController {
         items.append(contentsOf: newItems)
 
         let indexPaths = (startIndex ..< items.count).map { IndexPath(row: $0, section: 0) }
-        tableView.insertRows(at: indexPaths, with: .bottom)
+        UIView.performWithoutAnimation {
+            tableView.insertRows(at: indexPaths, with: .none)
+        }
         scrollToBottom(animated: true)
     }
 
